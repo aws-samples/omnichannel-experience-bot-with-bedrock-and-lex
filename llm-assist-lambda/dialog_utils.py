@@ -1,0 +1,181 @@
+import json
+import boto3
+import logging
+import re
+
+# Logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# boto3 clients
+lex_client = boto3.client("lexv2-models")
+bedrock_client = boto3.client("bedrock-runtime")
+
+
+# Function to get all intents for given bot
+def get_intents(bot_id, bot_version, locale_id):
+    # Populate dictionary of intents for bot
+    response = lex_client.list_intents(
+        botId=bot_id,
+        botVersion=bot_version,
+        localeId=locale_id,
+    )
+    all_intents = {}
+
+    for intent_summary in response["intentSummaries"]:
+        intent_name = intent_summary["intentName"]
+        intent_description = intent_summary["description"]
+        all_intents[intent_name] = intent_description
+
+    logger.info(f"All intents for bot are retrived: {all_intents}")
+    return all_intents
+
+
+# Function to get all slot types for given intent
+def get_slots(bot_id, bot_version, locale_id, intent):
+    # Search for intent ID of given intent
+    response = lex_client.list_intents(
+        botId=bot_id,
+        botVersion=bot_version,
+        localeId=locale_id,
+    )
+    intent_id = None
+    for intent_summary in response["intentSummaries"]:
+        if intent_summary["intentName"] == intent:
+            intent_id = intent_summary["intentId"]
+            break
+    if not intent_id:
+        logger.error(f"Intent '{intent}' not found")
+        return None
+
+    # Populate dictionary of slots for intent
+    response = lex_client.list_slots(
+        botId=bot_id,
+        botVersion=bot_version,
+        localeId=locale_id,
+        intentId=intent_id,
+    )
+    all_slots = {}
+
+    for slot_summary in response["slotSummaries"]:
+        slot_name = slot_summary["slotName"]
+        all_slots[slot_name] = None
+
+    logger.info(f"All slots for intent '{intent}' are retrived: {all_slots}")
+    return all_slots
+
+
+# Function to get all slot values within given slot type of intent
+def get_slot_values(bot_id, bot_version, locale_id, intent, slot_type):
+    # Search for intent ID of given intent
+    response = lex_client.list_intents(
+        botId=bot_id,
+        botVersion=bot_version,
+        localeId=locale_id,
+    )
+    intent_id = None
+    for intent_summary in response["intentSummaries"]:
+        if intent_summary["intentName"] == intent:
+            intent_id = intent_summary["intentId"]
+            break
+    if not intent_id:
+        logger.error(f"Intent '{intent}' not found")
+        return None
+
+    # Search for slot ID of given slot type
+    response = lex_client.list_slots(
+        botId=bot_id,
+        botVersion=bot_version,
+        localeId=locale_id,
+        intentId=intent_id,
+    )
+    slot_type_id = None
+    for slot_summary in response["slotSummaries"]:
+        if slot_summary["slotName"] == slot_type:
+            slot_type_id = slot_summary["slotTypeId"]
+            break
+    if not slot_type_id:
+        logger.error(f"Slot type '{slot_type}' not found")
+        return None
+
+    # Populate dictionary of slot values if given slot type is custom slot
+    try:
+        response = lex_client.describe_slot_type(
+            botId=bot_id,
+            botVersion=bot_version,
+            localeId=locale_id,
+            slotTypeId=slot_type_id,
+        )
+        all_slot_type_values = []
+
+        for slot_type_values in response["slotTypeValues"]:
+            all_slot_type_values.append(slot_type_values["sampleValue"]["value"])
+
+        logger.info(
+            f"Slot type values for '{slot_type}' is retrieved: {all_slot_type_values}"
+        )
+        return all_slot_type_values
+
+    except Exception as e:
+        logger.error(f"Given slot type is not custom slot")
+        raise e
+
+
+# Function to set a new slot value within dictionary of slots
+def set_slot(slots, slot_type, input_transcript, updated_slot):
+    new_slot = {
+        slot_type: {
+            "shape": "Scalar",
+            "value": {
+                "originalValue": input_transcript,
+                "resolvedValues": [updated_slot],
+                "interpretedValue": updated_slot,
+            },
+        }
+    }
+    slots.update(new_slot)
+
+    logger.info(
+        f"Updated slot type '{slot_type}' with value from '{input_transcript}' to '{updated_slot}'"
+    )
+    return slots
+
+
+# Function to get a slot that is not yet filled
+def get_next_unfilled_slot(slots):
+    for slot_name, slot_value in slots.items():
+        if slot_value is None:
+            logger.info(f"Will elicit slot type '{slot_name}' next")
+            return slot_name
+    logger.info(f"All slot(s) filled for this intent")
+    return None
+
+
+# Function to invoke LLM on Bedrock
+def invoke_bedrock(prompt, model):
+    logger.info(f"Incoming prompt: {prompt}")
+
+    body = json.dumps(
+        {
+            "anthropic_version": "",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+        }
+    )
+    response = bedrock_client.invoke_model(body=body, modelId=model)
+    response_body = json.loads(response.get("body").read())
+    answer = response_body.get("content")[0].get("text")
+
+    logger.info(f"LLM response: {answer}")
+
+    return answer
+
+
+# Function to extract contents within specified xml tags
+def extract_tag_content(content, tag_name):
+    pattern = f"<{tag_name}>(.*?)</{tag_name}>"
+    match = re.search(pattern, content, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return None

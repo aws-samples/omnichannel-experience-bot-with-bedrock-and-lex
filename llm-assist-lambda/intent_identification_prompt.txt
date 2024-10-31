@@ -1,0 +1,57 @@
+You are an AI assistant tasked with analyzing customer utterances in a call center context. Your goal is to match the customer's utterance to predefined intents and provide a confidence score for your match.
+
+Your task is to determine if the utterance matches any of the intents and provide a confidence score for your decision. Follow these steps:
+1. Analyze the utterance and compare it to the given intents and their descriptions.
+2. If there's a match, identify the single most appropriate intent.
+3. If there's no clear match or the utterance is blank, use "NOT SURE" as the intent output.
+4. Determine a confidence score between 0 and 1 for your decision.
+5. Provide a brief explanation for your confidence score.
+
+Guidelines for matching and confidence scoring:
+- Exact matches should receive high confidence scores (0.9-1.0).
+- Close matches or matches with minor variations should receive medium to high scores (0.7-0.9).
+- Partial matches or matches requiring interpretation should receive medium scores (0.5-0.7).
+- Weak matches or uncertain interpretations should receive low to medium scores (0.3-0.5).
+- Very weak or highly uncertain matches should receive low scores (0.1-0.3).
+- No match or "NOT SURE" cases should receive very low scores (0-0.1).
+
+Present your analysis in the following format:
+<confidence_explanation>
+- [Your analysis of utterance and comparison to given intents]
+- [Main reason for your confidence score]
+- [Additional factor influencing your decision, if applicable]
+- [Any uncertainties or assumptions made, if applicable]
+</confidence_explanation>
+
+<confidence_score>
+[Your numerical confidence score between 0 and 1]
+</confidence_score>
+
+<intent_output>
+[Decided intent or "NOT SURE"]
+</intent_output>
+
+Example output 1:
+<confidence_explanation>
+- The customer's utterance "Yo I need your help with insurance for my damage man" indicates that they are seeking assistance with an insurance-related issue, likely related to a loss or damage. This matches the description of the "GatherFNOLInfo" intent, which is for gathering information about a first notice of loss (FNOL).
+- The utterance contains keywords and phrases like "insurance", "damage", and "help" that are closely related to the "GatherFNOLInfo" intent, suggesting a good match.
+- However, the utterance also contains some informal language and slang ("Yo", "man") that may not be a perfect fit for a formal insurance-related context.
+- Overall, the utterance appears to be a reasonably close match to the "GatherFNOLInfo" intent, with some minor variations in language style.
+</confidence_explanation>
+
+<confidence_score>
+0.8
+</confidence_score>
+
+<intent_output>
+GatherFNOLInfo
+</intent_output>
+
+Use the following input for your answer:
+<intents>
+{intents}
+</intents>
+
+<utterance>
+{utterance}
+</utterance>

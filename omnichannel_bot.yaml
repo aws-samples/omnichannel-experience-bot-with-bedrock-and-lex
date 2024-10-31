@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  Amazon Lex for Insurance offers pre-built solutions
+  so you can enable experiences at scale and drive
+  digital engagement. The purpose-built bots provide
+  ready to use conversation flows along with training
+  data and dialog prompts, for both voice and chat modalities.
+
+Parameters:
+  ModelName:
+    Type: String
+    Description: >
+      Name of the Foundation Model to enhance the customer experience
+    Default: Claude-3-Haiku
+    AllowedValues:
+      - Claude-3-Haiku
+      - Claude-3-Sonnet
+
+Mappings:
+  FoundationModel:
+    Claude-3-Haiku:
+      Name: anthropic.claude-3-haiku-20240307-v1:0
+    Claude-3-Sonnet:
+      Name: anthropic.claude-3-sonnet-20240229-v1:0
+
+Resources:
+  # IAM Roles
+  BotRuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lexv2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: LexRuntimeRolePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - polly:SynthesizeSpeech
+                Resource: !Sub arn:aws:polly:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - lambda:invokeFunction
+                Resource: !GetAtt AIAssistLambda.Arn
+
+  AIAssistLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: BedrockModelInvokePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: !Sub
+                  - arn:aws:bedrock:${AWS::Region}::foundation-model/${name}
+                  - name: !FindInMap [FoundationModel, !Ref ModelName, Name]
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # IAM Policy
+  LexBotReadPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: FNOLBot
+    Properties:
+      PolicyName: LexBotReadPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - lex:ListIntents
+              - lex:ListSlots
+              - lex:DescribeSlotType
+            Resource: !Sub arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot/${FNOLBot.Id}
+      Roles:
+        - !Ref AIAssistLambdaRole
+
+  # Lambda Function
+  AIAssistLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ai-assist-lambda-${AWS::StackName}
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt AIAssistLambdaRole.Arn
+      Code:
+        S3Bucket: aws-blogs-artifacts-public
+        S3Key: ML-17242/llm-assist-lambda.zip
+      Runtime: python3.12
+      Timeout: 60
+      ReservedConcurrentExecutions: 100
+      Environment:
+        Variables:
+          foundation_model: !FindInMap [FoundationModel, !Ref ModelName, Name]
+
+  # Lambda Permission
+  LexPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AIAssistLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: lexv2.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot-alias/${FNOLBot.Id}/*
+
+  # Lex Bot
+  FNOLBot:
+    Type: AWS::Lex::Bot
+    Properties:
+      Name: FNOLBot
+      RoleArn: !GetAtt BotRuntimeRole.Arn
+      DataPrivacy:
+        ChildDirected: false
+      IdleSessionTTLInSeconds: 300
+      Description: This bot is responsible for gathering various FNOL data regarding claims
+      AutoBuildBotLocales: false
+      BotLocales:
+        - LocaleId: en_US
+          Description: Gather FNOL Locale
+          NluConfidenceThreshold: 0.40
+          VoiceSettings:
+            VoiceId: Ivy
+          SlotTypes:
+            - Name: Damage
+              Description: Damage that occured to the home
+              SlotTypeValues:
+                - SampleValue:
+                    Value: water
+                - SampleValue:
+                    Value: roof
+                - SampleValue:
+                    Value: window
+                - SampleValue:
+                    Value: plumbing
+                - SampleValue:
+                    Value: tree
+                - SampleValue:
+                    Value: bodily injury
+                - SampleValue:
+                    Value: total loss
+              ValueSelectionSetting:
+                ResolutionStrategy: TOP_RESOLUTION
+            - Name: PersonalInjury
+              Description: Injuries that may have occured as part of the claim
+              SlotTypeValues:
+                - SampleValue:
+                    Value: laceration
+                - SampleValue:
+                    Value: bruise
+                - SampleValue:
+                    Value: broken bone
+                - SampleValue:
+                    Value: concussion
+                - SampleValue:
+                    Value: cpr
+              ValueSelectionSetting:
+                ResolutionStrategy: TOP_RESOLUTION
+          Intents:
+            - Name: GatherFNOLInfo
+              Description: Intent for gathering FNOL of loss info
+              DialogCodeHook:
+                Enabled: true
+              SampleUtterances:
+                - Utterance: I'd like to start a home claim
+                - Utterance: I need to make a claim
+                - Utterance: Claim
+                - Utterance: claim for my {Damage}
+              SlotPriorities:
+                - Priority: 1
+                  SlotName: Damage
+                - Priority: 2
+                  SlotName: PersonalInjury
+              Slots:
+                - Name: Damage
+                  Description: Damage to the home
+                  SlotTypeName: Damage
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: What portion of the home was damaged?
+                      MaxRetries: 3
+                      AllowInterrupt: false
+                - Name: PersonalInjury
+                  Description: Personal Injury during the claim
+                  SlotTypeName: PersonalInjury
+                  ValueElicitationSetting:
+                    SlotConstraint: Required
+                    PromptSpecification:
+                      MessageGroupsList:
+                        - Message:
+                            PlainTextMessage:
+                              Value: Please describe any injuries that occured during the incident.
+                      MaxRetries: 3
+                      AllowInterrupt: false
+            - Name: FallbackIntent
+              Description: Default intent when no other intent matches
+              DialogCodeHook:
+                Enabled: true
+              ParentIntentSignature: AMAZON.FallbackIntent
+      TestBotAliasSettings:
+        BotAliasLocaleSettings:
+          - LocaleId: en_US
+            BotAliasLocaleSetting:
+              Enabled: true
+              CodeHookSpecification:
+                LambdaCodeHook:
+                  CodeHookInterfaceVersion: "1.0"
+                  LambdaArn: !GetAtt AIAssistLambda.Arn
+
+  # Bot Version
+  FNOLBotBotVersionWithCFN:
+    Type: AWS::Lex::BotVersion
+    Properties:
+      BotId: !Ref FNOLBot
+      BotVersionLocaleSpecification:
+        - LocaleId: en_US
+          BotVersionLocaleDetails:
+            SourceBotVersion: DRAFT
+      Description: This bot is responsible for gathering various FNOL data regarding claims
+
+  # Bot Alias
+  FNOLBotAliasWithCFN:
+    Type: AWS::Lex::BotAlias
+    Properties:
+      BotId: !Ref FNOLBot
+      BotAliasName: FNOLBotAlias
+      BotAliasLocaleSettings:
+        - LocaleId: en_US
+          BotAliasLocaleSetting:
+            Enabled: true
+            CodeHookSpecification:
+              LambdaCodeHook:
+                CodeHookInterfaceVersion: "1.0"
+                LambdaArn: !GetAtt AIAssistLambda.Arn
+      BotVersion: !GetAtt FNOLBotBotVersionWithCFN.BotVersion

@@ -1,0 +1,1 @@
+This folder contains assets for Lambda function that is used as a [dialog code hook](https://docs.aws.amazon.com/lexv2/latest/dg/paths-code-hook.html), and serves only as a reference (as the assets are already part of CloudFormation template).
