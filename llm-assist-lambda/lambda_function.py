@@ -19,7 +19,6 @@ MODEL_ID = os.environ.get("foundation_model")
 logger.info(f"Using foundation model: {MODEL_ID}")
 
 
-# Lambda handler
 def lambda_handler(event, context):
     logger.info(f"# New Lex event: {event}")
 
@@ -39,9 +38,9 @@ def lambda_handler(event, context):
     intent = session_state["intent"]
     slots = session_state["intent"]["slots"]
     session_attributes = session_state["sessionAttributes"]
-    elicited_slot_type = session_attributes.get("elicited_slot_type", None)
+    invocation_source = event.get("invocationSource")
 
-    # If Lex could not determine user's intent, use LLM to identify the intent based on user's utterance
+    # If Lex could not determine user's intent, use LLM to identify the intent
     if intent["name"] == "FallbackIntent":
         intents = get_intents(
             bot_id,
@@ -49,7 +48,6 @@ def lambda_handler(event, context):
             locale_id,
         )
 
-        # Invoke LLM hosted on Bedrock with slot assistance prompt
         with open("intent_identification_prompt.txt", "r") as file:
             intent_identification_prompt = file.read()
         llm_output = invoke_bedrock(
@@ -62,7 +60,6 @@ def lambda_handler(event, context):
         llm_identified_intent = extract_tag_content(llm_output, "intent_output")
         llm_confidence = extract_tag_content(llm_output, "confidence_score")
 
-        # If LLM was able to succesfully identify the intent of the user, update the intent and elicit the slot of the identified intent
         if llm_identified_intent.upper() != "NOT SURE" and float(llm_confidence) >= 0.7:
             slots = get_slots(
                 bot_id,
@@ -70,8 +67,13 @@ def lambda_handler(event, context):
                 locale_id,
                 llm_identified_intent,
             )
-            next_slot = get_next_unfilled_slot(slots)
-            session_attributes["elicited_slot_type"] = next_slot
+            next_slot = get_next_unfilled_slot(
+                bot_id=bot_id,
+                bot_version=bot_version,
+                locale_id=locale_id,
+                intent_name=llm_identified_intent,
+                slots=slots
+            )
 
             return {
                 "sessionState": {
@@ -87,8 +89,6 @@ def lambda_handler(event, context):
                     "sessionAttributes": session_attributes,
                 }
             }
-
-        # If LLM was unable to identify the intent, elicit for the intent again
         else:
             return {
                 "sessionState": {
@@ -105,94 +105,102 @@ def lambda_handler(event, context):
             }
 
     # If user is elicited for slot, use LLM to assist mapping the utterance to slot type values
-    elif elicited_slot_type:
-        slot_values = get_slot_values(
-            bot_id,
-            bot_version,
-            locale_id,
-            intent["name"],
-            elicited_slot_type,
-        )
-
-        # Invoke LLM hosted on Bedrock with slot assistance prompt
-        with open("slot_assistance_prompt.txt", "r") as file:
-            slot_assistance_prompt = file.read()
-        llm_output = invoke_bedrock(
-            slot_assistance_prompt.format(
-                slot_values=slot_values, utterance=input_transcript
-            ),
-            MODEL_ID,
-        )
-        llm_mapped_slot = extract_tag_content(llm_output, "slot_output")
-        llm_confidence = extract_tag_content(llm_output, "confidence_score")
-
-        # If LLM was able to succesfully map the utterance to one of the slot type values, update slot type value
-        if llm_mapped_slot.upper() != "NOT SURE" and float(llm_confidence) >= 0.7:
-            slots = set_slot(
-                slots,
-                elicited_slot_type,
-                input_transcript,
-                llm_mapped_slot,
+    elif invocation_source == "DialogCodeHook":
+        # Check if this is a slot miss by looking at the transcriptions
+        transcriptions = event.get("transcriptions", [])
+        is_slot_miss = False
+        
+        if transcriptions:
+            resolved_context = transcriptions[0].get("resolvedContext", {})
+            if resolved_context.get("intent") == "FallbackIntent":
+                is_slot_miss = True
+        
+        if is_slot_miss:
+            # Get the current slot being elicited from proposedNextState
+            current_slot = event["proposedNextState"]["dialogAction"]["slotToElicit"]
+            
+            # Get slot type information to check if it's a custom slot
+            slot_values = get_slot_values(
+                bot_id=bot_id,
+                bot_version=bot_version,
+                locale_id=locale_id,
+                intent=intent["name"],
+                slot_type=current_slot
             )
 
-            next_slot = get_next_unfilled_slot(slots)
+            if slot_values:
+                with open("slot_assistance_prompt.txt", "r") as file:
+                    slot_assistance_prompt = file.read()
+                llm_output = invoke_bedrock(
+                    slot_assistance_prompt.format(
+                        slot_values=slot_values, utterance=input_transcript
+                    ),
+                    MODEL_ID,
+                )
+                llm_mapped_slot = extract_tag_content(llm_output, "slot_output")
+                llm_confidence = extract_tag_content(llm_output, "confidence_score")
 
-            # If the intent has unfilled slot type, elicit that slot type next
-            if next_slot:
-                session_attributes["elicited_slot_type"] = next_slot
-                return {
-                    "sessionState": {
-                        "dialogAction": {
-                            "type": "ElicitSlot",
-                            "slotToElicit": next_slot,
-                        },
-                        "intent": {
-                            "name": intent["name"],
-                            "slots": slots,
-                            "state": "InProgress",
-                        },
-                        "sessionAttributes": session_attributes,
+                if llm_mapped_slot.upper() != "NOT SURE" and float(llm_confidence) >= 0.7:
+                    slots = set_slot(
+                        slots,
+                        current_slot,
+                        input_transcript,
+                        llm_mapped_slot,
+                    )
+
+                    next_slot = get_next_unfilled_slot(
+                        bot_id=bot_id,
+                        bot_version=bot_version,
+                        locale_id=locale_id,
+                        intent_name=intent["name"],
+                        slots=slots
+                    )
+
+                    if next_slot:
+                        return {
+                            "sessionState": {
+                                "dialogAction": {
+                                    "type": "ElicitSlot",
+                                    "slotToElicit": next_slot,
+                                },
+                                "intent": {
+                                    "name": intent["name"],
+                                    "slots": slots,
+                                    "state": "InProgress",
+                                },
+                                "sessionAttributes": session_attributes,
+                            }
+                        }
+                    else:
+                        return {
+                            "sessionState": {
+                                "dialogAction": {"type": "Delegate"},
+                                "intent": {
+                                    "name": intent["name"],
+                                    "slots": slots,
+                                    "state": "ReadyForFulfillment",
+                                },
+                                "sessionAttributes": session_attributes,
+                            }
+                        }
+
+                else:
+                    return {
+                        "sessionState": {
+                            "dialogAction": {
+                                "type": "ElicitSlot",
+                                "slotToElicit": current_slot,
+                            },
+                            "intent": {
+                                "name": intent["name"],
+                                "slots": slots,
+                                "state": "InProgress",
+                            },
+                            "sessionAttributes": session_attributes,
+                        }
                     }
-                }
 
-            # If all slots are elicited for intent, move to ReadyForFulfillment
-            else:
-                return {
-                    "sessionState": {
-                        "dialogAction": {"type": "Delegate"},
-                        "intent": {
-                            "name": intent["name"],
-                            "slots": slots,
-                            "state": "ReadyForFulfillment",
-                        },
-                        "sessionAttributes": session_attributes,
-                    }
-                }
-
-        # If LLM was unable to map the utterance to one of the slot type values, elicit for the same slot again
-        else:
-            return {
-                "sessionState": {
-                    "dialogAction": {
-                        "type": "ElicitSlot",
-                        "slotToElicit": elicited_slot_type,
-                    },
-                    "intent": {
-                        "name": intent["name"],
-                        "slots": slots,
-                        "state": "InProgress",
-                    },
-                    "sessionAttributes": session_attributes,
-                }
-            }
-
-    # Populate elicited slot type in session attributes
-    elicited_slot_type = None
-    if proposed_next_state:
-        elicited_slot_type = proposed_next_state["dialogAction"]["slotToElicit"]
-    session_attributes["elicited_slot_type"] = elicited_slot_type
-
-    # Return the session state
+    # For all other cases, delegate to Lex
     return {
         "sessionState": {
             "dialogAction": {"type": "Delegate"},
