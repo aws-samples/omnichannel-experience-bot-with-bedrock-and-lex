@@ -72,7 +72,7 @@ def lambda_handler(event, context):
                 bot_version=bot_version,
                 locale_id=locale_id,
                 intent_name=llm_identified_intent,
-                slots=slots
+                slots=slots,
             )
 
             return {
@@ -109,23 +109,23 @@ def lambda_handler(event, context):
         # Check if this is a slot miss by looking at the transcriptions
         transcriptions = event.get("transcriptions", [])
         is_slot_miss = False
-        
+
         if transcriptions:
             resolved_context = transcriptions[0].get("resolvedContext", {})
             if resolved_context.get("intent") == "FallbackIntent":
                 is_slot_miss = True
-        
+
         if is_slot_miss:
             # Get the current slot being elicited from proposedNextState
             current_slot = event["proposedNextState"]["dialogAction"]["slotToElicit"]
-            
+
             # Get slot type information to check if it's a custom slot
             slot_values = get_slot_values(
                 bot_id=bot_id,
                 bot_version=bot_version,
                 locale_id=locale_id,
                 intent=intent["name"],
-                slot_type=current_slot
+                slot_type=current_slot,
             )
 
             if slot_values:
@@ -140,7 +140,10 @@ def lambda_handler(event, context):
                 llm_mapped_slot = extract_tag_content(llm_output, "slot_output")
                 llm_confidence = extract_tag_content(llm_output, "confidence_score")
 
-                if llm_mapped_slot.upper() != "NOT SURE" and float(llm_confidence) >= 0.7:
+                if (
+                    llm_mapped_slot.upper() != "NOT SURE"
+                    and float(llm_confidence) >= 0.7
+                ):
                     slots = set_slot(
                         slots,
                         current_slot,
@@ -153,7 +156,7 @@ def lambda_handler(event, context):
                         bot_version=bot_version,
                         locale_id=locale_id,
                         intent_name=intent["name"],
-                        slots=slots
+                        slots=slots,
                     )
 
                     if next_slot:
