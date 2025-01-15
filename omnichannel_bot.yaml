@@ -74,9 +74,13 @@ Resources:
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
-                Resource: !Sub
-                  - arn:aws:bedrock:${AWS::Region}::foundation-model/${name}
-                  - name: !FindInMap [FoundationModel, !Ref ModelName, Name]
+                Resource:
+                  - !Sub
+                    - arn:aws:bedrock:*::foundation-model/${name}
+                    - name: !FindInMap [FoundationModel, !Ref ModelName, Name]
+                  - !Sub
+                    - arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/us.${name}
+                    - name: !FindInMap [FoundationModel, !Ref ModelName, Name]
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
@@ -94,6 +98,7 @@ Resources:
               - lex:ListIntents
               - lex:ListSlots
               - lex:DescribeSlotType
+              - lex:DescribeIntent
             Resource: !Sub arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot/${FNOLBot.Id}
       Roles:
         - !Ref AIAssistLambdaRole
@@ -113,7 +118,9 @@ Resources:
       ReservedConcurrentExecutions: 100
       Environment:
         Variables:
-          foundation_model: !FindInMap [FoundationModel, !Ref ModelName, Name]
+          foundation_model: !Sub
+            - us.${name}
+            - name: !FindInMap [FoundationModel, !Ref ModelName, Name]
 
   # Lambda Permission
   LexPermission:
