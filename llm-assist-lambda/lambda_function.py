@@ -106,15 +106,15 @@ def lambda_handler(event, context):
 
     # If user is elicited for slot, use LLM to assist mapping the utterance to slot type values
     elif invocation_source == "DialogCodeHook":
+        # Check if this is a slot miss by looking at the transcriptions
         transcriptions = event.get("transcriptions", [])
         is_slot_miss = False
-    
+        
         if transcriptions:
             resolved_context = transcriptions[0].get("resolvedContext", {})
-            if (resolved_context.get("intent") == "FallbackIntent" or 
-                event["proposedNextState"]["dialogAction"].get("type") == "ElicitSlot"):
+            if resolved_context.get("intent") == "FallbackIntent":
                 is_slot_miss = True
-            
+        
         if is_slot_miss:
             # Get the current slot being elicited from proposedNextState
             current_slot = event["proposedNextState"]["dialogAction"]["slotToElicit"]
