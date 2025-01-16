@@ -106,6 +106,39 @@ def lambda_handler(event, context):
 
     # If user is elicited for slot, use LLM to assist mapping the utterance to slot type values
     elif invocation_source == "DialogCodeHook":
+
+    # Get all slots for this intent to determine the first slot
+        all_slots = get_slots(
+            bot_id=bot_id,
+            bot_version=bot_version,
+            locale_id=locale_id,
+            intent=intent["name"]
+        )
+        first_slot = next(iter(all_slots)) if all_slots else None
+
+        # Check if this is the initial intent recognition
+        is_initial_recognition = (
+            event["proposedNextState"]["prompt"].get("attempt") == "Initial" and
+            not any(slot is not None for slot in slots.values()) and
+            event["proposedNextState"]["dialogAction"].get("slotToElicit") == first_slot
+        )
+
+        if is_initial_recognition:
+            # Delegate to Lex for the initial intent recognition
+            return {
+                "sessionState": {
+                    "dialogAction": {"type": "Delegate"},
+                    "intent": {
+                        "name": intent["name"],
+                        "slots": slots,
+                        "state": "InProgress"
+                    },
+                    "sessionAttributes": session_attributes,
+                }
+            }
+        
+        
+        
         transcriptions = event.get("transcriptions", [])
         is_slot_miss = False
     
